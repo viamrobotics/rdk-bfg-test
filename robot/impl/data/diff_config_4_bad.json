@@ -41,7 +41,11 @@
         {
             "model": "fake2",
             "name": "mock2",
-            "type": "mock"
+            "type": "mock",
+            "attributes":
+            {
+                "one": 2
+            }
         }
     ],
     "processes":
