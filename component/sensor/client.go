@@ -1,5 +1,5 @@
-// Package imu contains a gRPC based imu client.
-package imu
+// Package sensor contains a gRPC based sensor client.
+package sensor
 
 import (
 	"context"
@@ -9,13 +9,12 @@ import (
 
 	"go.viam.com/rdk/grpc"
 	pb "go.viam.com/rdk/proto/api/component/v1"
-	"go.viam.com/rdk/spatialmath"
 )
 
-// serviceClient is a client satisfies the imu.proto contract.
+// serviceClient is a client satisfies the sensor.proto contract.
 type serviceClient struct {
 	conn   rpc.ClientConn
-	client pb.IMUServiceClient
+	client pb.SensorServiceClient
 	logger golog.Logger
 }
 
@@ -31,7 +30,7 @@ func newServiceClient(ctx context.Context, address string, logger golog.Logger, 
 
 // newSvcClientFromConn constructs a new serviceClient using the passed in connection.
 func newSvcClientFromConn(conn rpc.ClientConn, logger golog.Logger) *serviceClient {
-	client := pb.NewIMUServiceClient(conn)
+	client := pb.NewSensorServiceClient(conn)
 	sc := &serviceClient{
 		conn:   conn,
 		client: client,
@@ -45,14 +44,14 @@ func (sc *serviceClient) Close() error {
 	return sc.conn.Close()
 }
 
-// client is an IMU client.
+// client is a Sensor client.
 type client struct {
 	*serviceClient
 	name string
 }
 
 // NewClient constructs a new client that is served at the given address.
-func NewClient(ctx context.Context, name string, address string, logger golog.Logger, opts ...rpc.DialOption) (IMU, error) {
+func NewClient(ctx context.Context, name string, address string, logger golog.Logger, opts ...rpc.DialOption) (Sensor, error) {
 	sc, err := newServiceClient(ctx, address, logger, opts...)
 	if err != nil {
 		return nil, err
@@ -61,54 +60,27 @@ func NewClient(ctx context.Context, name string, address string, logger golog.Lo
 }
 
 // NewClientFromConn constructs a new Client from connection passed in.
-func NewClientFromConn(ctx context.Context, conn rpc.ClientConn, name string, logger golog.Logger) IMU {
+func NewClientFromConn(ctx context.Context, conn rpc.ClientConn, name string, logger golog.Logger) Sensor {
 	sc := newSvcClientFromConn(conn, logger)
 	return clientFromSvcClient(sc, name)
 }
 
-func clientFromSvcClient(sc *serviceClient, name string) IMU {
+func clientFromSvcClient(sc *serviceClient, name string) Sensor {
 	return &client{sc, name}
 }
 
-func (c *client) AngularVelocity(ctx context.Context) (spatialmath.AngularVelocity, error) {
-	resp, err := c.client.AngularVelocity(ctx, &pb.IMUServiceAngularVelocityRequest{
-		Name: c.name,
-	})
-	if err != nil {
-		return spatialmath.AngularVelocity{}, err
-	}
-	return spatialmath.AngularVelocity{
-		X: resp.AngularVelocity.X,
-		Y: resp.AngularVelocity.Y,
-		Z: resp.AngularVelocity.Z,
-	}, nil
-}
-
-func (c *client) Orientation(ctx context.Context) (spatialmath.Orientation, error) {
-	resp, err := c.client.Orientation(ctx, &pb.IMUServiceOrientationRequest{
-		Name: c.name,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &spatialmath.EulerAngles{
-		Roll:  resp.Orientation.Roll,
-		Pitch: resp.Orientation.Pitch,
-		Yaw:   resp.Orientation.Yaw,
-	}, nil
-}
-
 func (c *client) Readings(ctx context.Context) ([]interface{}, error) {
-	vel, err := c.AngularVelocity(ctx)
+	resp, err := c.client.Readings(ctx, &pb.SensorServiceReadingsRequest{
+		Name: c.name,
+	})
 	if err != nil {
 		return nil, err
 	}
-	orientation, err := c.Orientation(ctx)
-	if err != nil {
-		return nil, err
+	readings := make([]interface{}, 0, len(resp.Readings))
+	for _, r := range resp.Readings {
+		readings = append(readings, r.AsInterface())
 	}
-	ea := orientation.EulerAngles()
-	return []interface{}{vel.X, vel.Y, vel.Z, ea.Roll, ea.Pitch, ea.Yaw}, nil
+	return readings, nil
 }
 
 // Close cleanly closes the underlying connections.
