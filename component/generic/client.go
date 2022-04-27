@@ -1,5 +1,5 @@
-// Package sensor contains a gRPC based sensor client.
-package sensor
+// Package generic contains a gRPC based generic client.
+package generic
 
 import (
 	"context"
@@ -7,15 +7,17 @@ import (
 	"github.com/edaniels/golog"
 	"go.viam.com/utils/rpc"
 
-	"go.viam.com/rdk/component/generic"
 	"go.viam.com/rdk/grpc"
-	pb "go.viam.com/rdk/proto/api/component/sensor/v1"
+	pb "go.viam.com/rdk/proto/api/component/generic/v1"
+
+	"google.golang.org/protobuf/types/known/structpb"
+
 )
 
-// serviceClient is a client satisfies the sensor.proto contract.
+// serviceClient is a client satisfies the generic.proto contract.
 type serviceClient struct {
 	conn   rpc.ClientConn
-	client pb.SensorServiceClient
+	client pb.GenericServiceClient
 	logger golog.Logger
 }
 
@@ -31,7 +33,7 @@ func newServiceClient(ctx context.Context, address string, logger golog.Logger, 
 
 // newSvcClientFromConn constructs a new serviceClient using the passed in connection.
 func newSvcClientFromConn(conn rpc.ClientConn, logger golog.Logger) *serviceClient {
-	client := pb.NewSensorServiceClient(conn)
+	client := pb.NewGenericServiceClient(conn)
 	sc := &serviceClient{
 		conn:   conn,
 		client: client,
@@ -45,14 +47,14 @@ func (sc *serviceClient) Close() error {
 	return sc.conn.Close()
 }
 
-// client is a Sensor client.
+// client is a Generic client.
 type client struct {
 	*serviceClient
 	name string
 }
 
 // NewClient constructs a new client that is served at the given address.
-func NewClient(ctx context.Context, name string, address string, logger golog.Logger, opts ...rpc.DialOption) (Sensor, error) {
+func NewClient(ctx context.Context, name string, address string, logger golog.Logger, opts ...rpc.DialOption) (Generic, error) {
 	sc, err := newServiceClient(ctx, address, logger, opts...)
 	if err != nil {
 		return nil, err
@@ -61,27 +63,17 @@ func NewClient(ctx context.Context, name string, address string, logger golog.Lo
 }
 
 // NewClientFromConn constructs a new Client from connection passed in.
-func NewClientFromConn(ctx context.Context, conn rpc.ClientConn, name string, logger golog.Logger) Sensor {
+func NewClientFromConn(ctx context.Context, conn rpc.ClientConn, name string, logger golog.Logger) Generic {
 	sc := newSvcClientFromConn(conn, logger)
 	return clientFromSvcClient(sc, name)
 }
 
-func clientFromSvcClient(sc *serviceClient, name string) Sensor {
+func clientFromSvcClient(sc *serviceClient, name string) Generic {
 	return &client{sc, name}
 }
 
-func (c *client) GetReadings(ctx context.Context) ([]interface{}, error) {
-	resp, err := c.client.GetReadings(ctx, &pb.GetReadingsRequest{
-		Name: c.name,
-	})
-	if err != nil {
-		return nil, err
-	}
-	readings := make([]interface{}, 0, len(resp.Readings))
-	for _, r := range resp.Readings {
-		readings = append(readings, r.AsInterface())
-	}
-	return readings, nil
+func (c *client) Do(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	return DoFromConnection(ctx, c.conn, c.name, cmd)
 }
 
 // Close cleanly closes the underlying connections.
@@ -89,6 +81,20 @@ func (c *client) Close() error {
 	return c.serviceClient.Close()
 }
 
-func (c *client) Do(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
-	return generic.DoFromConnection(ctx, c.conn, c.name, cmd)
+// DoFromConnection is a helper to allow Do() calls from other component clients.
+func DoFromConnection(ctx context.Context, conn rpc.ClientConn, name string, cmd map[string]interface{}) (map[string]interface{}, error) {
+	gclient := pb.NewGenericServiceClient(conn)
+	command, err := structpb.NewStruct(cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := gclient.Do(ctx, &pb.DoRequest{
+		Name:    name,
+		Command: command,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Result.AsMap(), nil
 }
