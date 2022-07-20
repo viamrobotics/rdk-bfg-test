@@ -1,17 +1,7 @@
 import { enableAutoDestroy, mount } from "@vue/test-utils";
 import Base from "@/components/Base.vue";
-import ViamSelect from "@/components/ViamSelect.vue";
-import ViamInput from "@/components/ViamInput.vue";
-import Collapse from "@/components/Collapse.vue";
-import Breadcrumbs from "@/components/Breadcrumbs.vue";
 import ViamIcon from "@/components/ViamIcon.vue";
-import Tabs from "@/components/Tabs.vue";
-import Tab from "@/components/Tab.vue";
-import RadioButtons from "@/components/RadioButtons.vue";
-import ViamButton from "@/components/Button.vue";
 import KeyboardInput from "@/components/KeyboardInput.vue";
-import Range from "@/components/Range.vue";
-import ClickOutside from "@/directives/clickOutside";
 
 describe("Base", () => {
   enableAutoDestroy(afterEach);
@@ -24,20 +14,8 @@ describe("Base", () => {
         crumbs: ["Keyboard", "Discrete"],
       },
       components: {
-        Collapse,
-        Breadcrumbs,
         ViamIcon,
-        RadioButtons,
-        Tabs,
-        Tab,
-        ViamButton,
         KeyboardInput,
-        ViamSelect,
-        ViamInput,
-        Range,
-      },
-      directives: {
-        ClickOutside,
       },
     });
 
@@ -52,17 +30,8 @@ describe("Base", () => {
         crumbs: ["Keyboard", "Discrete"],
       },
       components: {
-        Collapse,
-        Breadcrumbs,
         ViamIcon,
-        RadioButtons,
-        Tabs,
-        Tab,
-        ViamButton,
         KeyboardInput,
-        ViamSelect,
-        ViamInput,
-        Range,
       },
     });
     const firstButton = wrapper.find(".tabs-container button:first-child");
@@ -92,17 +61,8 @@ describe("Base", () => {
         crumbs: ["Keyboard", "Discrete"],
       },
       components: {
-        Collapse,
-        Breadcrumbs,
         ViamIcon,
-        RadioButtons,
-        Tabs,
-        Tab,
-        ViamButton,
         KeyboardInput,
-        ViamSelect,
-        ViamInput,
-        Range,
       },
     });
     const lastButton = wrapper.find(".tabs-container button:last-child");
@@ -126,17 +86,8 @@ describe("Base", () => {
         crumbs: ["Keyboard", "Discrete"],
       },
       components: {
-        Collapse,
-        Breadcrumbs,
         ViamIcon,
-        RadioButtons,
-        Tabs,
-        Tab,
-        ViamButton,
         KeyboardInput,
-        ViamSelect,
-        ViamInput,
-        Range,
       },
     });
     const lastButton = wrapper.find(".tabs-container button:last-child");
@@ -161,17 +112,8 @@ describe("Base", () => {
         crumbs: ["Keyboard", "Discrete"],
       },
       components: {
-        Collapse,
-        Breadcrumbs,
         ViamIcon,
-        RadioButtons,
-        Tabs,
-        Tab,
-        ViamButton,
         KeyboardInput,
-        ViamSelect,
-        ViamInput,
-        Range,
       },
     });
     const lastButton = wrapper.find(".tabs-container button:last-child");
