@@ -11,17 +11,19 @@ import (
 
 	"github.com/adrianmo/go-nmea"
 	"github.com/edaniels/golog"
+	"github.com/golang/geo/r3"
 	"github.com/jacobsa/go-serial/serial"
 	geo "github.com/kellydunn/golang-geo"
 	"go.viam.com/utils"
 
 	"go.viam.com/rdk/component/generic"
-	"go.viam.com/rdk/component/gps"
+	"go.viam.com/rdk/component/movementsensor"
 	"go.viam.com/rdk/config"
 	"go.viam.com/rdk/registry"
+	"go.viam.com/rdk/spatialmath"
 )
 
-// SerialAttrConfig is used for converting Serial NMEA GPS config attributes.
+// SerialAttrConfig is used for converting Serial NMEA MovementSensor config attributes.
 type SerialAttrConfig struct {
 	// Serial
 	SerialPath     string `json:"path"`
@@ -39,7 +41,7 @@ func (config *SerialAttrConfig) ValidateSerial(path string) error {
 
 func init() {
 	registry.RegisterComponent(
-		gps.Subtype,
+		movementsensor.Subtype,
 		"nmea-serial",
 		registry.Component{Constructor: func(
 			ctx context.Context,
@@ -47,12 +49,12 @@ func init() {
 			config config.Component,
 			logger golog.Logger,
 		) (interface{}, error) {
-			return newSerialNMEAGPS(ctx, config, logger)
+			return newSerialNMEAMovementSensor(ctx, config, logger)
 		}})
 }
 
-// SerialNMEAGPS allows the use of any GPS chip that communicates over serial.
-type SerialNMEAGPS struct {
+// SerialNMEAMovementSensor allows the use of any MovementSensor chip that communicates over serial.
+type SerialNMEAMovementSensor struct {
 	generic.Unimplemented
 	mu                 sync.RWMutex
 	dev                io.ReadWriteCloser
@@ -77,29 +79,29 @@ const (
 	disableNmeaName        = "disable_nmea"
 )
 
-func newSerialNMEAGPS(ctx context.Context, config config.Component, logger golog.Logger) (nmeaGPS, error) {
+func newSerialNMEAMovementSensor(ctx context.Context, config config.Component, logger golog.Logger) (nmeaMovementSensor, error) {
 	serialPath := config.Attributes.String(pathAttrName)
 	if serialPath == "" {
-		return nil, fmt.Errorf("SerialNMEAGPS expected non-empty string for %q", pathAttrName)
+		return nil, fmt.Errorf("SerialNMEAMovementSensor expected non-empty string for %q", pathAttrName)
 	}
 	correctionPath := config.Attributes.String(correctionAttrName)
 	if correctionPath == "" {
 		correctionPath = serialPath
-		logger.Info("SerialNMEAGPS: correction_path using path")
+		logger.Info("SerialNMEAMovementSensor: correction_path using path")
 	}
 	baudRate := config.Attributes.Int(baudRateName, 0)
 	if baudRate == 0 {
 		baudRate = 9600
-		logger.Info("SerialNMEAGPS: baud_rate using default 9600")
+		logger.Info("SerialNMEAMovementSensor: baud_rate using default 9600")
 	}
 	correctionBaudRate := config.Attributes.Int(correctionBaudRateName, 0)
 	if correctionBaudRate == 0 {
 		correctionBaudRate = baudRate
-		logger.Info("SerialNMEAGPS: correction_baud using baud_rate")
+		logger.Info("SerialNMEAMovementSensor: correction_baud using baud_rate")
 	}
 	disableNmea := config.Attributes.Bool(disableNmeaName, false)
 	if disableNmea {
-		logger.Info("SerialNMEAGPS: NMEA reading disabled")
+		logger.Info("SerialNMEAMovementSensor: NMEA reading disabled")
 	}
 
 	options := serial.OpenOptions{
@@ -117,7 +119,7 @@ func newSerialNMEAGPS(ctx context.Context, config config.Component, logger golog
 
 	cancelCtx, cancelFunc := context.WithCancel(ctx)
 
-	g := &SerialNMEAGPS{
+	g := &SerialNMEAMovementSensor{
 		dev:                dev,
 		cancelCtx:          cancelCtx,
 		cancelFunc:         cancelFunc,
@@ -136,7 +138,7 @@ func newSerialNMEAGPS(ctx context.Context, config config.Component, logger golog
 }
 
 // Start begins reading nmea messages from module and updates gps data.
-func (g *SerialNMEAGPS) Start(ctx context.Context) {
+func (g *SerialNMEAMovementSensor) Start(ctx context.Context) {
 	g.activeBackgroundWorkers.Add(1)
 	utils.PanicCapturingGo(func() {
 		defer g.activeBackgroundWorkers.Done()
@@ -166,62 +168,60 @@ func (g *SerialNMEAGPS) Start(ctx context.Context) {
 }
 
 // GetCorrectionInfo returns the serial path that takes in rtcm corrections and baudrate for reading.
-func (g *SerialNMEAGPS) GetCorrectionInfo() (string, uint) {
+func (g *SerialNMEAMovementSensor) GetCorrectionInfo() (string, uint) {
 	return g.correctionPath, g.correctionBaudRate
 }
 
-// ReadLocation returns the current geographic location of the GPS.
-func (g *SerialNMEAGPS) ReadLocation(ctx context.Context) (*geo.Point, error) {
+// GetPosition position, altitide.
+func (g *SerialNMEAMovementSensor) GetPosition(ctx context.Context) (*geo.Point, float64, error) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return g.data.location, nil
+	return g.data.location, g.data.alt, nil
 }
 
-// ReadAltitude returns the current altitude of the GPS.
-func (g *SerialNMEAGPS) ReadAltitude(ctx context.Context) (float64, error) {
+// GetAccuracy returns the accuracy, hDOP and vDOP.
+func (g *SerialNMEAMovementSensor) GetAccuracy(ctx context.Context) (map[string]float32, error) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return g.data.alt, nil
+	return map[string]float32{"hDOP": float32(g.data.hDOP), "vDOP": float32(g.data.vDOP)}, nil
 }
 
-// ReadSpeed returns the current speed of the GPS.
-func (g *SerialNMEAGPS) ReadSpeed(ctx context.Context) (float64, error) {
+// GetLinearVelocity linear velocity.
+func (g *SerialNMEAMovementSensor) GetLinearVelocity(ctx context.Context) (r3.Vector, error) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return g.data.speed, nil
+	return r3.Vector{0, g.data.speed, 0}, nil
 }
 
-// ReadSatellites returns the number of satellites that are currently visible to the GPS.
-func (g *SerialNMEAGPS) ReadSatellites(ctx context.Context) (int, int, error) {
+// GetAngularVelocity angularvelocity.
+func (g *SerialNMEAMovementSensor) GetAngularVelocity(ctx context.Context) (spatialmath.AngularVelocity, error) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return g.data.satsInUse, g.data.satsInView, nil
+	return spatialmath.AngularVelocity{}, nil
 }
 
-// ReadAccuracy returns how accurate the lat/long readings are.
-func (g *SerialNMEAGPS) ReadAccuracy(ctx context.Context) (float64, float64, error) {
+// GetOrientation orientation.
+func (g *SerialNMEAMovementSensor) GetOrientation(ctx context.Context) (spatialmath.Orientation, error) {
+	return nil, nil
+}
+
+// GetCompassHeading 0->360.
+func (g *SerialNMEAMovementSensor) GetCompassHeading(ctx context.Context) (float64, error) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return g.data.hDOP, g.data.vDOP, nil
+	return 0, nil
 }
 
-// ReadValid returns whether or not the GPS is currently reading valid measurements.
-func (g *SerialNMEAGPS) ReadValid(ctx context.Context) (bool, error) {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	return g.data.valid, nil
-}
-
-// ReadFix returns Fix quality of GPS measurements.
-func (g *SerialNMEAGPS) ReadFix(ctx context.Context) (int, error) {
+// ReadFix returns Fix quality of MovementSensor measurements.
+func (g *SerialNMEAMovementSensor) ReadFix(ctx context.Context) (int, error) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	return g.data.fixQuality, nil
 }
 
-// GetReadings will use return all of the GPS Readings.
-func (g *SerialNMEAGPS) GetReadings(ctx context.Context) ([]interface{}, error) {
-	readings, err := gps.GetReadings(ctx, g)
+// GetReadings will use return all of the MovementSensor Readings.
+func (g *SerialNMEAMovementSensor) GetReadings(ctx context.Context) ([]interface{}, error) {
+	readings, err := movementsensor.GetReadings(ctx, g)
 	if err != nil {
 		return nil, err
 	}
@@ -236,9 +236,17 @@ func (g *SerialNMEAGPS) GetReadings(ctx context.Context) ([]interface{}, error) 
 	return readings, nil
 }
 
-// Close shuts down the SerialNMEAGPS.
-func (g *SerialNMEAGPS) Close() error {
-	g.logger.Debug("Closing SerialNMEAGPS")
+// GetProperties what do I do!
+func (g *SerialNMEAMovementSensor) GetProperties(ctx context.Context) (*movementsensor.Properties, error) {
+	return &movementsensor.Properties{
+		LinearVelocitySupported: true,
+		PositionSupported:       true,
+	}, nil
+}
+
+// Close shuts down the SerialNMEAMovementSensor.
+func (g *SerialNMEAMovementSensor) Close() error {
+	g.logger.Debug("Closing SerialNMEAMovementSensor")
 	g.cancelFunc()
 	g.activeBackgroundWorkers.Wait()
 	g.mu.Lock()
@@ -248,7 +256,7 @@ func (g *SerialNMEAGPS) Close() error {
 			return err
 		}
 		g.dev = nil
-		g.logger.Debug("SerialNMEAGPS Closed")
+		g.logger.Debug("SerialNMEAMovementSensor Closed")
 	}
 	return nil
 }

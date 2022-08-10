@@ -1,5 +1,5 @@
-// Package vectornav implement vectornav imu
-package vectornav
+// Package imuvectornav implement vectornav imu
+package imuvectornav
 
 import (
 	"context"
@@ -9,22 +9,23 @@ import (
 
 	"github.com/edaniels/golog"
 	"github.com/golang/geo/r3"
+	geo "github.com/kellydunn/golang-geo"
 	"github.com/pkg/errors"
 	rdkutils "go.viam.com/utils"
 
 	"go.viam.com/rdk/component/board"
 	"go.viam.com/rdk/component/generic"
-	"go.viam.com/rdk/component/imu"
+	"go.viam.com/rdk/component/movementsensor"
 	"go.viam.com/rdk/config"
 	"go.viam.com/rdk/registry"
 	"go.viam.com/rdk/spatialmath"
 	rutils "go.viam.com/rdk/utils"
 )
 
-const model = "vectornav"
+const model = "imu_vectornav"
 
 func init() {
-	registry.RegisterComponent(imu.Subtype, model, registry.Component{
+	registry.RegisterComponent(movementsensor.Subtype, model, registry.Component{
 		Constructor: func(ctx context.Context, deps registry.Dependencies, config config.Component, logger golog.Logger) (interface{}, error) {
 			return NewVectorNav(ctx, deps, config, logger)
 		},
@@ -83,7 +84,12 @@ const (
 // NewVectorNav connect and set up a vectornav IMU over SPI.
 // Will also compensate for acceleration and delta velocity bias over one second so be
 // sure the IMU is still when calling this function.
-func NewVectorNav(ctx context.Context, deps registry.Dependencies, config config.Component, logger golog.Logger) (imu.IMU, error) {
+func NewVectorNav(
+	ctx context.Context,
+	deps registry.Dependencies,
+	config config.Component,
+	logger golog.Logger,
+) (movementsensor.MovementSensor, error) {
 	boardName := config.Attributes.String("board")
 	b, err := board.FromDependencies(deps, boardName)
 	if err != nil {
@@ -209,12 +215,10 @@ func NewVectorNav(ctx context.Context, deps registry.Dependencies, config config
 				case <-cancelCtx.Done():
 					return
 				case <-timer.C:
-					v.mu.Lock()
 					err := v.getReadings(ctx)
 					if err != nil {
 						return
 					}
-					v.mu.Unlock()
 				}
 			}
 		})
@@ -223,98 +227,121 @@ func NewVectorNav(ctx context.Context, deps registry.Dependencies, config config
 	return v, nil
 }
 
-// ReadAngularVelocity returns angular velocity from the gyroscope deg_per_sec.
-func (i *vectornav) ReadAngularVelocity(ctx context.Context) (spatialmath.AngularVelocity, error) {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	return i.angularVelocity, nil
+func (vn *vectornav) GetAngularVelocity(ctx context.Context) (spatialmath.AngularVelocity, error) {
+	vn.mu.Lock()
+	defer vn.mu.Unlock()
+	return vn.angularVelocity, nil
 }
 
-// ReadOrientation returns gyroscope orientation in degrees.
-func (i *vectornav) ReadAcceleration(ctx context.Context) (r3.Vector, error) {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	return i.acceleration, nil
+func (vn *vectornav) GetAcceleration(ctx context.Context) (r3.Vector, error) {
+	vn.mu.Lock()
+	defer vn.mu.Unlock()
+	return vn.acceleration, nil
 }
 
-// ReadAcceleration returns accelerometer reading in mm_per_sec_per_sec.
-func (i *vectornav) ReadOrientation(ctx context.Context) (spatialmath.Orientation, error) {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	return &i.orientation, nil
+func (vn *vectornav) GetOrientation(ctx context.Context) (spatialmath.Orientation, error) {
+	vn.mu.Lock()
+	defer vn.mu.Unlock()
+	return &vn.orientation, nil
 }
 
-// ReadMagnetometer returns megnetif field data in gauss.
-func (i *vectornav) ReadMagnetometer(ctx context.Context) (r3.Vector, error) {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	return i.magnetometer, nil
+func (vn *vectornav) GetCompassHeading(ctx context.Context) (float64, error) {
+	vn.mu.Lock()
+	defer vn.mu.Unlock()
+	return vn.orientation.Yaw, nil
 }
 
-func (i *vectornav) GetReadings(ctx context.Context) ([]interface{}, error) {
-	return imu.GetReadings(ctx, i)
+func (vn *vectornav) GetLinearVelocity(ctx context.Context) (r3.Vector, error) {
+	return r3.Vector{}, nil
 }
 
-func (i *vectornav) getReadings(ctx context.Context) error {
-	out, err := i.readRegisterSPI(ctx, yawPitchRollMagAccGyro, 48)
+func (vn *vectornav) GetPosition(ctx context.Context) (*geo.Point, float64, error) {
+	return nil, 0, nil
+}
+
+func (vn *vectornav) GetAccuracy(ctx context.Context) (map[string]float32, error) {
+	return map[string]float32{}, nil
+}
+
+func (vn *vectornav) GetMagnetometer(ctx context.Context) (r3.Vector, error) {
+	vn.mu.Lock()
+	defer vn.mu.Unlock()
+	return vn.magnetometer, nil
+}
+
+func (vn *vectornav) GetProperties(ctx context.Context) (*movementsensor.Properties, error) {
+	return &movementsensor.Properties{
+		AngularVelocitySupported: true,
+		OrientationSupported:     true,
+	}, nil
+}
+
+func (vn *vectornav) GetReadings(ctx context.Context) ([]interface{}, error) {
+	return movementsensor.GetReadings(ctx, vn)
+}
+
+func (vn *vectornav) getReadings(ctx context.Context) error {
+	out, err := vn.readRegisterSPI(ctx, yawPitchRollMagAccGyro, 48)
 	if err != nil {
 		return err
 	}
-	i.orientation.Yaw = rutils.DegToRad(float64(rutils.Float32FromBytesLE(out[0:4])))
-	i.orientation.Pitch = rutils.DegToRad(float64(rutils.Float32FromBytesLE(out[4:8])))
-	i.orientation.Roll = rutils.DegToRad(float64(rutils.Float32FromBytesLE(out[8:12])))
+	vn.mu.Lock()
+	defer vn.mu.Unlock()
+	vn.orientation.Yaw = rutils.DegToRad(float64(rutils.Float32FromBytesLE(out[0:4])))
+	vn.orientation.Pitch = rutils.DegToRad(float64(rutils.Float32FromBytesLE(out[4:8])))
+	vn.orientation.Roll = rutils.DegToRad(float64(rutils.Float32FromBytesLE(out[8:12])))
 	// unit gauss
-	i.magnetometer.X = float64(rutils.Float32FromBytesLE(out[12:16]))
-	i.magnetometer.Y = float64(rutils.Float32FromBytesLE(out[16:20]))
-	i.magnetometer.Z = float64(rutils.Float32FromBytesLE(out[20:24]))
+	vn.magnetometer.X = float64(rutils.Float32FromBytesLE(out[12:16]))
+	vn.magnetometer.Y = float64(rutils.Float32FromBytesLE(out[16:20]))
+	vn.magnetometer.Z = float64(rutils.Float32FromBytesLE(out[20:24]))
 	// unit mm/s^2
-	i.acceleration.X = float64(rutils.Float32FromBytesLE(out[24:28])) * 1000
-	i.acceleration.Y = float64(rutils.Float32FromBytesLE(out[28:32])) * 1000
-	i.acceleration.Z = float64(rutils.Float32FromBytesLE(out[32:36])) * 1000
+	vn.acceleration.X = float64(rutils.Float32FromBytesLE(out[24:28])) * 1000
+	vn.acceleration.Y = float64(rutils.Float32FromBytesLE(out[28:32])) * 1000
+	vn.acceleration.Z = float64(rutils.Float32FromBytesLE(out[32:36])) * 1000
 	// unit rad/s
-	i.angularVelocity.X = rutils.RadToDeg(float64(rutils.Float32FromBytesLE(out[36:40])))
-	i.angularVelocity.Y = rutils.RadToDeg(float64(rutils.Float32FromBytesLE(out[40:44])))
-	i.angularVelocity.Z = rutils.RadToDeg(float64(rutils.Float32FromBytesLE(out[44:48])))
-	dv, err := i.readRegisterSPI(ctx, deltaVDeltaTheta, 28)
+	vn.angularVelocity.X = rutils.RadToDeg(float64(rutils.Float32FromBytesLE(out[36:40])))
+	vn.angularVelocity.Y = rutils.RadToDeg(float64(rutils.Float32FromBytesLE(out[40:44])))
+	vn.angularVelocity.Z = rutils.RadToDeg(float64(rutils.Float32FromBytesLE(out[44:48])))
+	dv, err := vn.readRegisterSPI(ctx, deltaVDeltaTheta, 28)
 	if err != nil {
 		return err
 	}
 	// unit deg/s
-	i.dTheta.X = float64(rutils.Float32FromBytesLE(dv[4:8]))
-	i.dTheta.Y = float64(rutils.Float32FromBytesLE(dv[8:12]))
-	i.dTheta.Z = float64(rutils.Float32FromBytesLE(dv[12:16]))
+	vn.dTheta.X = float64(rutils.Float32FromBytesLE(dv[4:8]))
+	vn.dTheta.Y = float64(rutils.Float32FromBytesLE(dv[8:12]))
+	vn.dTheta.Z = float64(rutils.Float32FromBytesLE(dv[12:16]))
 	// unit m/s
-	i.dV.X = float64(rutils.Float32FromBytesLE(dv[16:20])) - i.bdVX
-	i.dV.Y = float64(rutils.Float32FromBytesLE(dv[20:24])) - i.bdVY
-	i.dV.Z = float64(rutils.Float32FromBytesLE(dv[24:28])) - i.bdVZ
+	vn.dV.X = float64(rutils.Float32FromBytesLE(dv[16:20])) - vn.bdVX
+	vn.dV.Y = float64(rutils.Float32FromBytesLE(dv[20:24])) - vn.bdVY
+	vn.dV.Z = float64(rutils.Float32FromBytesLE(dv[24:28])) - vn.bdVZ
 	// unit s
-	i.dt = rutils.Float32FromBytesLE(dv[0:4])
+	vn.dt = rutils.Float32FromBytesLE(dv[0:4])
 	return nil
 }
 
-func (i *vectornav) readRegisterSPI(ctx context.Context, reg vectornavRegister, readLen uint) ([]byte, error) {
-	i.spiMu.Lock()
-	defer i.spiMu.Unlock()
-	if i.busClosed {
+func (vn *vectornav) readRegisterSPI(ctx context.Context, reg vectornavRegister, readLen uint) ([]byte, error) {
+	vn.spiMu.Lock()
+	defer vn.spiMu.Unlock()
+	if vn.busClosed {
 		return nil, errors.New("C=cannot read spi register the bus is closed")
 	}
-	hnd, err := i.bus.OpenHandle()
+	hnd, err := vn.bus.OpenHandle()
 	if err != nil {
 		return nil, err
 	}
 	cmd := []byte{byte(vectorNavSPIRead), byte(reg), 0, 0}
-	_, err = hnd.Xfer(ctx, uint(i.speed), i.cs, 3, cmd)
+	_, err = hnd.Xfer(ctx, uint(vn.speed), vn.cs, 3, cmd)
 	if err != nil {
 		return nil, err
 	}
 	rdkutils.SelectContextOrWait(ctx, 110*time.Microsecond)
 	cmd = make([]byte, readLen+4)
-	out, err := hnd.Xfer(ctx, uint(i.speed), i.cs, 3, cmd)
+	out, err := hnd.Xfer(ctx, uint(vn.speed), vn.cs, 3, cmd)
 	if err != nil {
 		return nil, err
 	}
 	if out[3] != 0 {
-		return nil, errors.Errorf("vectornav read error returned %d speed was %d", out[3], i.speed)
+		return nil, errors.Errorf("vectornav read error returned %d speed was %d", out[3], vn.speed)
 	}
 	err = hnd.Close()
 	if err != nil {
@@ -324,25 +351,25 @@ func (i *vectornav) readRegisterSPI(ctx context.Context, reg vectornavRegister, 
 	return out[4:], nil
 }
 
-func (i *vectornav) writeRegisterSPI(ctx context.Context, reg vectornavRegister, data []byte) error {
-	i.spiMu.Lock()
-	defer i.spiMu.Unlock()
-	if i.busClosed {
+func (vn *vectornav) writeRegisterSPI(ctx context.Context, reg vectornavRegister, data []byte) error {
+	vn.spiMu.Lock()
+	defer vn.spiMu.Unlock()
+	if vn.busClosed {
 		return errors.New("Cannot write spi register the bus is closed")
 	}
-	hnd, err := i.bus.OpenHandle()
+	hnd, err := vn.bus.OpenHandle()
 	if err != nil {
 		return err
 	}
 	cmd := []byte{byte(vectorNavSPIWrite), byte(reg), 0, 0}
 	cmd = append(cmd, data...)
-	_, err = hnd.Xfer(ctx, uint(i.speed), i.cs, 3, cmd)
+	_, err = hnd.Xfer(ctx, uint(vn.speed), vn.cs, 3, cmd)
 	if err != nil {
 		return err
 	}
 	rdkutils.SelectContextOrWait(ctx, 110*time.Microsecond)
 	cmd = make([]byte, len(data)+4)
-	out, err := hnd.Xfer(ctx, uint(i.speed), i.cs, 3, cmd)
+	out, err := hnd.Xfer(ctx, uint(vn.speed), vn.cs, 3, cmd)
 	if err != nil {
 		return err
 	}
@@ -357,24 +384,24 @@ func (i *vectornav) writeRegisterSPI(ctx context.Context, reg vectornavRegister,
 	return nil
 }
 
-func (i *vectornav) vectornavTareSPI(ctx context.Context) error {
-	i.spiMu.Lock()
-	defer i.spiMu.Unlock()
-	if i.busClosed {
+func (vn *vectornav) vectornavTareSPI(ctx context.Context) error {
+	vn.spiMu.Lock()
+	defer vn.spiMu.Unlock()
+	if vn.busClosed {
 		return errors.New("Cannot write spi register the bus is closed")
 	}
-	hnd, err := i.bus.OpenHandle()
+	hnd, err := vn.bus.OpenHandle()
 	if err != nil {
 		return err
 	}
 	cmd := []byte{byte(vectorNavSPITare), 0, 0, 0}
-	_, err = hnd.Xfer(ctx, uint(i.speed), i.cs, 3, cmd)
+	_, err = hnd.Xfer(ctx, uint(vn.speed), vn.cs, 3, cmd)
 	if err != nil {
 		return err
 	}
 	rdkutils.SelectContextOrWait(ctx, 110*time.Microsecond)
 	cmd = []byte{0, 0, 0, 0}
-	out, err := hnd.Xfer(ctx, uint(i.speed), i.cs, 3, cmd)
+	out, err := hnd.Xfer(ctx, uint(vn.speed), vn.cs, 3, cmd)
 	if err != nil {
 		return err
 	}
@@ -389,7 +416,7 @@ func (i *vectornav) vectornavTareSPI(ctx context.Context) error {
 	return nil
 }
 
-func (i *vectornav) compensateAccelBias(ctx context.Context, smpSize uint) error {
+func (vn *vectornav) compensateAccelBias(ctx context.Context, smpSize uint) error {
 	var msg []byte
 	msg = append(msg, rutils.BytesFromFloat32LE(1.0)...)
 	msg = append(msg, rutils.BytesFromFloat32LE(0.0)...)
@@ -406,18 +433,18 @@ func (i *vectornav) compensateAccelBias(ctx context.Context, smpSize uint) error
 	msg = append(msg, rutils.BytesFromFloat32LE(0.0)...)
 	msg = append(msg, rutils.BytesFromFloat32LE(0.0)...)
 	msg = append(msg, rutils.BytesFromFloat32LE(0.0)...)
-	err := i.writeRegisterSPI(ctx, accCompensationConfiguration, msg)
+	err := vn.writeRegisterSPI(ctx, accCompensationConfiguration, msg)
 	if err != nil {
 		return errors.Wrap(err, "couldn't write the acceleration compensation register")
 	}
-	mdlG, err := i.readRegisterSPI(ctx, magAccRefVectors, 24)
+	mdlG, err := vn.readRegisterSPI(ctx, magAccRefVectors, 24)
 	if err != nil {
 		return errors.Wrap(err, "couldn't calculate acceleration bias")
 	}
 	accZ := rutils.Float32FromBytesLE(mdlG[20:24])
 	var accMX, accMY, accMZ float32
-	for j := uint(0); j < smpSize; j++ {
-		acc, err := i.readRegisterSPI(ctx, acceleration, 12)
+	for i := uint(0); i < smpSize; i++ {
+		acc, err := vn.readRegisterSPI(ctx, acceleration, 12)
 		if err != nil {
 			return errors.Wrap(err, "error reading acceleration register during bias compensation")
 		}
@@ -448,30 +475,30 @@ func (i *vectornav) compensateAccelBias(ctx context.Context, smpSize uint) error
 	msg = append(msg, rutils.BytesFromFloat32LE(accMY)...)
 	msg = append(msg, rutils.BytesFromFloat32LE(accZ+accMZ)...)
 
-	err = i.writeRegisterSPI(ctx, accCompensationConfiguration, msg)
+	err = vn.writeRegisterSPI(ctx, accCompensationConfiguration, msg)
 	if err != nil {
 		return errors.Wrap(err, "could not write the acceleration register")
 	}
-	i.logger.Infof("Acceleration compensated with %1.6f %1.6f %1.6f ref accZ %1.6f", accMX, accMY, accMZ, accZ)
+	vn.logger.Infof("Acceleration compensated with %1.6f %1.6f %1.6f ref accZ %1.6f", accMX, accMY, accMZ, accZ)
 	return nil
 }
 
-func (i *vectornav) compensateDVBias(ctx context.Context, smpSize uint) error {
+func (vn *vectornav) compensateDVBias(ctx context.Context, smpSize uint) error {
 	var bX, bY, bZ float32
-	_, err := i.readRegisterSPI(ctx, deltaVDeltaTheta, 28)
+	_, err := vn.readRegisterSPI(ctx, deltaVDeltaTheta, 28)
 	if err != nil {
 		return errors.Wrap(err, "error reading dV register during bias compensation")
 	}
 	dt := 10 * time.Millisecond
-	if i.polling > 0 {
-		s := 1.0 / float64(i.polling)
+	if vn.polling > 0 {
+		s := 1.0 / float64(vn.polling)
 		dt = time.Duration(s * float64(time.Second))
 	}
 	for j := uint(0); j < smpSize; j++ {
 		if !rdkutils.SelectContextOrWait(ctx, dt) {
 			return errors.New("error in context during Dv compensation")
 		}
-		dv, err := i.readRegisterSPI(ctx, deltaVDeltaTheta, 28)
+		dv, err := vn.readRegisterSPI(ctx, deltaVDeltaTheta, 28)
 		if err != nil {
 			return errors.Wrap(err, "error reading dV register during bias compensation")
 		}
@@ -479,17 +506,18 @@ func (i *vectornav) compensateDVBias(ctx context.Context, smpSize uint) error {
 		bY += rutils.Float32FromBytesLE(dv[20:24])
 		bZ += rutils.Float32FromBytesLE(dv[24:28])
 	}
-	i.bdVX = float64(bX) / float64(smpSize)
-	i.bdVY = float64(bY) / float64(smpSize)
-	i.bdVZ = float64(bZ) / float64(smpSize)
-	i.logger.Infof("velocity bias compensated with %1.6f %1.6f %1.6f",
-		i.bdVX, i.bdVY, i.bdVZ)
+	vn.bdVX = float64(bX) / float64(smpSize)
+	vn.bdVY = float64(bY) / float64(smpSize)
+	vn.bdVZ = float64(bZ) / float64(smpSize)
+	vn.logger.Infof("velocity bias compensated with %1.6f %1.6f %1.6f",
+		vn.bdVX, vn.bdVY, vn.bdVZ)
 	return nil
 }
 
-func (i *vectornav) Close() {
-	i.logger.Debug("closing vecnav")
-	i.cancelFunc()
-	i.busClosed = true
-	i.activeBackgroundWorkers.Wait()
+func (vn *vectornav) Close() {
+	vn.logger.Debug("closing vecnav")
+	vn.cancelFunc()
+	vn.busClosed = true
+	vn.activeBackgroundWorkers.Wait()
 }
+
